@@ -1,0 +1,17 @@
+# Build outputs
+**/bin/
+**/obj/
+
+# User-specific Visual Studio files
+*.user
+*.suo
+.vs/
+
+# macOS
+.DS_Store
+
+# Rider
+.idea/
+
+# Generated JSON output (runtime artifact)
+solar_system.json
