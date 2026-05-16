@@ -1,6 +1,7 @@
 # Build outputs
 **/bin/
 **/obj/
+**/TestResults/
 
 # User-specific Visual Studio files
 *.user
