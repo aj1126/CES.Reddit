@@ -51,13 +51,13 @@ public class MacroSimulationManager
         foreach (var planet in _system.Planets)
             planet.Evolve(_system.Generation + 1, _rng);
 
-        // 2. Apply biome mutations across the whole system
-        BiomeMutationEngine.ApplyMutations(_system, _rng);
+        // 2. Apply biome mutations across the whole system, scaled by current ChaosFactor
+        BiomeMutationEngine.ApplyMutations(_system, _rng, _config.ChaosFactor);
 
         // 3. Advance generation counter
         _system.Generation++;
 
-        // 4. Check for abiogenesis on each planet
-        AbiogenesisEngine.Tick(_system, tick.SimulatedYears);
+        // Decay vote-accumulated mutation volatility toward baseline each tick
+        _config.TickVolatilityDecay();
     }
 }

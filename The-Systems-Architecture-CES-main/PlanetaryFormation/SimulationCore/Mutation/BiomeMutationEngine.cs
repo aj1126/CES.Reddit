@@ -24,13 +24,13 @@ public static class BiomeMutationEngine
     /// Applies one round of genetic-style mutations to all biomes on every planet
     /// in the solar system.
     /// </summary>
-    public static void ApplyMutations(SolarSystem system, Random rng)
+    public static void ApplyMutations(SolarSystem system, Random rng, double chaosFactor = 0.0)
     {
         foreach (var planet in system.Planets)
-            MutatePlanet(planet, rng);
+            MutatePlanet(planet, rng, chaosFactor);
     }
 
-    private static void MutatePlanet(CelestialBody planet, Random rng)
+    private static void MutatePlanet(CelestialBody planet, Random rng, double chaosFactor)
     {
         var toRemove = new List<Biome>();
 
@@ -38,7 +38,7 @@ public static class BiomeMutationEngine
         {
             if (rng.NextDouble() > biome.MutationRate) continue;
 
-            MutateBiome(biome, rng);
+            MutateBiome(biome, rng, chaosFactor);
             biome.GenerationsEvolved++;
 
             // Mark for extinction if vegetation collapses and the biome allows it
@@ -50,15 +50,22 @@ public static class BiomeMutationEngine
         foreach (var dead in toRemove)
             planet.Biomes.Remove(dead);
 
-        // Biome birth: a new mutant biome may spontaneously emerge
-        if (rng.NextDouble() < BiomeBirthChance)
+        // Biome birth: scales with chaos. At ChaosFactor = 0: 3% chance (baseline).
+        // At ChaosFactor = 1 (peak Reddit engagement): up to 10% — volcanic upheaval
+        // and cosmic bombardment carve new ecological niches out of existing terrain.
+        double biomeBirthChance = BiomeBirthChance + chaosFactor * 0.07;
+        if (rng.NextDouble() < biomeBirthChance)
             planet.Biomes.Add(GenerateMutantBiome(planet, rng));
     }
 
-    private static void MutateBiome(Biome biome, Random rng)
+    private static void MutateBiome(Biome biome, Random rng, double chaosFactor)
     {
         int property = rng.Next(4);
-        double delta = SampleGaussian(rng, mean: 0, stdDev: 0.05);
+        // ChaosFactor widens the environmental mutation spread. At ChaosFactor = 0:
+        // stdDev = 0.05 (V1 baseline). At ChaosFactor = 1: stdDev = 0.15 (3× wider).
+        // This means a "Solar Flare" vote produces more extreme biome shifts per tick,
+        // not just more frequent genome mutations.
+        double delta = SampleGaussian(rng, mean: 0, stdDev: 0.05 + chaosFactor * 0.10);
 
         switch (property)
         {

@@ -168,10 +168,18 @@ public class MicroSimulationManager
             // Generation index advances every tick regardless of whether a mutation fires.
             species.GenerationIndex++;
 
+            // MutationVolatilityModifier is accumulated from Reddit vote payloads
+            // (e.g. "Bombard with Cosmic Rays" += 0.08) and decays each tick.
+            // Adding it to the per-genome volatility before clamping means active
+            // vote events push even conservative genomes toward their mutation ceiling.
+            double chaosMaxProb = Math.Clamp(
+                _config.MutationProbabilityMax + _config.ChaosFactor * 0.20,
+                0.0, 1.0);
+
             double mutProb = Math.Clamp(
-                species.BaseGenome.MutationVolatility,
+                species.BaseGenome.MutationVolatility + _config.MutationVolatilityModifier,
                 _config.MutationProbabilityMin,
-                _config.MutationProbabilityMax);
+                chaosMaxProb);
 
             if (rng.NextDouble() > mutProb) continue;
 
@@ -213,9 +221,22 @@ public class MicroSimulationManager
 
     private (Genome Mutated, bool DidSpeciate, MutationType MutationKind) NudgeGenome(Genome genome, Random rng)
     {
-        double stdDev    = _config.GenomeMutationStdDev;
-        var    mutated   = genome;
-        bool   speciated = false;
+        // MutationVolatilityModifier widens the Gaussian spread proportionally to
+        // Reddit vote chaos. At modifier = 0 (baseline): stdDev = GenomeMutationStdDev.
+        // At modifier = 0.30 (three stacked Cosmic Ray votes): stdDev is 7× wider,
+        // producing far more radical trait jumps per cycle.
+        double stdDev = _config.GenomeMutationStdDev + _config.MutationVolatilityModifier;
+
+        // Under high ChaosFactor, the speciation threshold tightens: smaller field
+        // deltas are sufficient to branch a new species. This is the mathematical
+        // expression of the "arms race" — chaotic environments accelerate divergence.
+        // Floor at 0.05 to prevent every mutation becoming a speciation event.
+        double effectiveSpeciationThreshold = Math.Max(
+            _config.SpeciationThreshold * (1.0 - _config.ChaosFactor * 0.50),
+            0.05);
+
+        var  mutated   = genome;
+        bool speciated = false;
 
         // Pick one field to mutate per reproduction cycle.
         // Fields 0–5 are scalar; 6 is structural; 7–9 are material.
@@ -254,7 +275,7 @@ public class MicroSimulationManager
         {
             double delta = BiomeMutationEngine.SampleGaussian(rng, 0, stdDev);
             f = Math.Max(0f, f + (float)delta);
-            if (Math.Abs(delta) / nominalRange > _config.SpeciationThreshold)
+            if (Math.Abs(delta) / nominalRange > effectiveSpeciationThreshold)
                 speciated = true;
         }
 

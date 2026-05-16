@@ -62,10 +62,14 @@ public class EnvironmentalPressureEngine
         const float maxMetabolism = 2.0f;
         float energyEfficiency = Math.Clamp(1f - genome.MetabolismRate / maxMetabolism, 0f, 1f) * 0.10f;
 
-        // ── Instability penalty ───────────────────────────────────────────────
-        // High mutation volatility causes genomic instability — offspring are more
-        // likely to be maladapted, reducing effective reproductive output.
-        float instabilityPenalty = Math.Clamp(genome.MutationVolatility, 0f, 1f) * 0.10f;
+        // ── Instability penalty (Reddit-aware) ────────────────────────────────
+        // ChaosFactor amplifies the fitness cost of genomic instability.
+        // At ChaosFactor = 0 (quiet subreddit)  : scale = 0.10 — V1 baseline.
+        // At ChaosFactor = 1 (Solar Flare vote) : scale = 0.25 — 2.5× cost.
+        // Volatile genomes pay a heavier tax under cosmic bombardment, creating
+        // natural selective pressure toward stability between vote events.
+        float chaosInstabilityScale = 0.10f + (float)_config.ChaosFactor * 0.15f;
+        float instabilityPenalty    = Math.Clamp(genome.MutationVolatility, 0f, 1f) * chaosInstabilityScale;
 
         // ── Composite ─────────────────────────────────────────────────────────
         float raw = environmentalMatchScore + speedAdvantage + energyEfficiency - instabilityPenalty;
@@ -81,18 +85,39 @@ public class EnvironmentalPressureEngine
         float fitness = ComputeFitness(species.BaseGenome, biome);
         species.FitnessScore = fitness;
 
-        if (fitness < 0.1f)
+        // Chaos raises the extinction tipping point: under high Reddit engagement,
+        // more species live on the knife-edge of collapse.
+        // At ChaosFactor = 0: threshold = 0.10 (V1 baseline).
+        // At ChaosFactor = 1: threshold = 0.20 (twice as many species are at risk).
+        float collapseThreshold = 0.10f + (float)_config.ChaosFactor * 0.10f;
+        if (fitness < collapseThreshold)
         {
-            // Near-zero fitness → rapid population collapse
             species.Population = Math.Max(0, species.Population / 2);
             return;
         }
 
+        // V2 insight: atmospheric pressure amplifies carrying capacity.
+        // A dense volcanic atmosphere drives richer mineral cycling and energy flux,
+        // sustaining larger populations. Creates a closed Reddit feedback loop:
+        //   "Trigger Volcanic Activity" vote
+        //     → biome.AtmosphericPressure rises (via BiomeMutationEngine)
+        //     → effectiveCapacity grows
+        //     → surviving species can reach larger peak populations.
+        float atmMultiplier     = Math.Clamp((float)biome.AtmosphericPressure, 0.1f, 3.0f);
+        long  effectiveCapacity = Math.Clamp(
+            (long)(carryingCapacity * atmMultiplier),
+            _config.InitialPopulation,
+            _config.CarryingCapacityMax * 3L);
+
+        // High chaos disrupts food-web predictability even for well-adapted species.
+        // At ChaosFactor = 0: no debuff. At ChaosFactor = 1: growth rate = 70% of normal.
+        double chaosFoodDebuff = 1.0 - _config.ChaosFactor * 0.30;
+
         // Logistic growth: rate scales with fitness; tapers as population nears capacity
-        double growthRate     = species.BaseGenome.ReproductionRate * fitness;
-        double capacityFactor = 1.0 - (double)species.Population / carryingCapacity;
+        double growthRate     = species.BaseGenome.ReproductionRate * fitness * chaosFoodDebuff;
+        double capacityFactor = 1.0 - (double)species.Population / effectiveCapacity;
         long   delta          = (long)(species.Population * growthRate * capacityFactor);
 
-        species.Population = Math.Clamp(species.Population + delta, 0, carryingCapacity);
+        species.Population = Math.Clamp(species.Population + delta, 0, effectiveCapacity);
     }
 }
