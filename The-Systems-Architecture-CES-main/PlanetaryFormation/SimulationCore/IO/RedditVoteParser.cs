@@ -31,6 +31,7 @@ public sealed class RedditVoteParser
     public const string SteerCometSwarmOption         = "Steer a Comet Swarm";
     public const string AggressivePredationDriveOption = "Aggressive Predation Drive";
     public const string IncreaseSolarProximityOption  = "Increase Solar Proximity";
+    private const double MinimumOrbitalRadiusAu = 0.01;
 
     private readonly Dictionary<string, double> _planetTemperatureModifiers = new(StringComparer.OrdinalIgnoreCase);
 
@@ -164,7 +165,7 @@ public sealed class RedditVoteParser
             1.0);
 
         planet.OrbitalRadiusAU = Math.Max(
-            0.01,
+            MinimumOrbitalRadiusAu,
             planet.OrbitalRadiusAU + payload.OrbitalRadiusDeltaAu);
     }
 
@@ -191,7 +192,8 @@ public sealed class RedditVoteParser
     /// </summary>
     public void ApplyToAlphaSpecies(SpeciesData? alphaSpecies, RedditVotePayload payload)
     {
-        if (alphaSpecies is null || payload is null) return;
+        EnsurePayload(payload);
+        if (alphaSpecies is null) return;
 
         Genome mutatedGenome = alphaSpecies.BaseGenome;
         mutatedGenome.MutationVolatility = Math.Clamp(
