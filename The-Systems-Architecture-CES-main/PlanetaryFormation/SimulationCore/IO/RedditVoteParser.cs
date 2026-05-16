@@ -18,7 +18,7 @@ public sealed class RedditVotePayload
     public double SurfaceWaterPercentDelta { get; set; }
     public double PrebioticChemistryScoreDelta { get; set; }
     public bool ForceAlphaCarnivore { get; set; }
-    public double OrbitalRadiusDeltaAU { get; set; }
+    public double OrbitalRadiusDeltaAu { get; set; }
 }
 
 /// <summary>
@@ -130,7 +130,7 @@ public sealed class RedditVoteParser
     public void HandleIncreaseSolarProximity(RedditVotePayload payload, int intensity = 1)
     {
         EnsurePayload(payload);
-        payload.OrbitalRadiusDeltaAU -= _orbitalRadiusReductionAu * Math.Max(1, intensity);
+        payload.OrbitalRadiusDeltaAu -= _orbitalRadiusReductionAu * Math.Max(1, intensity);
     }
 
     /// <summary>
@@ -165,7 +165,7 @@ public sealed class RedditVoteParser
 
         planet.OrbitalRadiusAU = Math.Max(
             0.01,
-            planet.OrbitalRadiusAU + payload.OrbitalRadiusDeltaAU);
+            planet.OrbitalRadiusAU + payload.OrbitalRadiusDeltaAu);
     }
 
     /// <summary>
