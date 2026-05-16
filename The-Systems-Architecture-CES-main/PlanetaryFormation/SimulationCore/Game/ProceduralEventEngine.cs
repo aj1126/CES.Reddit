@@ -29,6 +29,20 @@ public record GammaRayBurstEvent(IReadOnlyList<CelestialBody> AffectedPlanets, d
 /// </summary>
 public record CometDeliveryEvent(CelestialBody TargetPlanet, double ScoreBoost, double SimulatedYears);
 
+/// <summary>
+/// V2 catastrophe: Published when a supervolcanic eruption plunges a planet into a
+/// prolonged volcanic winter, suppressing all biome mutation rates.
+/// </summary>
+/// <param name="BiomeMutationDebuff">Fraction by which biome mutation rates are multiplied (0–1).</param>
+public record VolcanicWinterEvent(CelestialBody Planet, double BiomeMutationDebuff, double SimulatedYears);
+
+/// <summary>
+/// V2 catastrophe: Published when a pathogen pandemic sweeps a planet.
+/// Extinction severity scales with the current <see cref="SimulationConfig.ChaosFactor"/>,
+/// meaning high Reddit engagement makes outbreaks more virulent.
+/// </summary>
+public record PandemicEvent(CelestialBody Planet, int SpeciesExtinguished, double SimulatedYears);
+
 // ── Engine ────────────────────────────────────────────────────────────────────
 
 /// <summary>
@@ -54,14 +68,22 @@ public class ProceduralEventEngine
     /// <summary>Simulated years at which the next procedural event will fire.</summary>
     private double _nextEventAt;
 
-    // Relative weights for each event category.
+    /// <summary>
+    /// Tracks the mean interval seen on the previous tick so we can detect when
+    /// Reddit engagement has shortened it and proportionally pull in the next event.
+    /// </summary>
+    private double _lastKnownMeanInterval;
+
+    // Relative weights for each event category (V2 adds VolcanicWinter + Pandemic).
     private static readonly (ProceduralEventType Type, int Weight)[] EventWeights =
     {
         (ProceduralEventType.AsteroidImpact,  20),
         (ProceduralEventType.SolarFlare,      15),
-        (ProceduralEventType.IceAge,          15),
+        (ProceduralEventType.IceAge,          10),
         (ProceduralEventType.GammaRayBurst,    5),
-        (ProceduralEventType.CometDelivery,   45),
+        (ProceduralEventType.CometDelivery,   35),
+        (ProceduralEventType.VolcanicWinter,  10),  // V2 catastrophe
+        (ProceduralEventType.Pandemic,         5),  // V2 catastrophe
     };
 
     private static readonly int TotalWeight = EventWeights.Sum(e => e.Weight);
@@ -80,6 +102,7 @@ public class ProceduralEventEngine
         EventBus.Subscribe<TickEvent>(OnTick);
         // Schedule the first event relative to the current simulated time so the
         // engine does not fire immediately if it is created mid-simulation.
+        _lastKnownMeanInterval = _config.ProceduralEventMeanIntervalYears;
         _nextEventAt = SampleNextArrival(SimulationClock.SimulatedYears);
     }
 
@@ -90,6 +113,11 @@ public class ProceduralEventEngine
 
     private void OnTick(TickEvent tick)
     {
+        // When Reddit engagement has shortened ProceduralEventMeanIntervalYears,
+        // proportionally pull in the already-scheduled next event so catastrophes
+        // accelerate immediately rather than waiting for the old schedule to expire.
+        RescheduleIfEngagementChanged(tick.SimulatedYears);
+
         // Process all Poisson arrivals that fall within this tick — large macro
         // time steps can advance past multiple scheduled events at once.
         while (tick.SimulatedYears >= _nextEventAt)
@@ -98,6 +126,33 @@ public class ProceduralEventEngine
             FireRandomEvent(eventAt);
             _nextEventAt = SampleNextArrival(eventAt);
         }
+    }
+
+    /// <summary>
+    /// Detects a Reddit-engagement-driven reduction in
+    /// <see cref="SimulationConfig.ProceduralEventMeanIntervalYears"/> and
+    /// proportionally scales the remaining wait until the next event.
+    ///
+    /// If the mean interval has shrunk by 50 % (e.g. 500 k → 250 k years),
+    /// the remaining scheduled gap is also halved, so catastrophes begin
+    /// arriving sooner without breaking the Poisson distribution contract for
+    /// future arrivals.  Increases in the mean interval (lower engagement) are
+    /// intentionally ignored — the next <see cref="SampleNextArrival"/> call
+    /// will pick up the longer interval naturally.
+    /// </summary>
+    private void RescheduleIfEngagementChanged(double currentYears)
+    {
+        double currentMean = _config.ProceduralEventMeanIntervalYears;
+        if (currentMean < _lastKnownMeanInterval)
+        {
+            double remaining = _nextEventAt - currentYears;
+            if (remaining > 0)
+            {
+                double ratio = currentMean / _lastKnownMeanInterval;
+                _nextEventAt = currentYears + remaining * ratio;
+            }
+        }
+        _lastKnownMeanInterval = currentMean;
     }
 
     private double SampleNextArrival(double fromYears)
@@ -122,6 +177,10 @@ public class ProceduralEventEngine
                 FireGammaRayBurst(simulatedYears); break;
             case ProceduralEventType.CometDelivery:
                 FireCometDelivery(simulatedYears); break;
+            case ProceduralEventType.VolcanicWinter:
+                FireVolcanicWinter(simulatedYears); break;
+            case ProceduralEventType.Pandemic:
+                FirePandemic(simulatedYears); break;
         }
     }
 
@@ -208,6 +267,42 @@ public class ProceduralEventEngine
         EventBus.Publish(new CometDeliveryEvent(target, _config.PanspermiaScoreBoost, simulatedYears));
     }
 
+    /// <summary>
+    /// V2 catastrophe: A supervolcanic eruption plunges the target planet into a
+    /// volcanic winter.  All biome mutation rates are suppressed by a debuff factor
+    /// that deepens at high <see cref="SimulationConfig.ChaosFactor"/> (i.e. the
+    /// more Reddit engagement is driving chaos, the harsher the eruption).
+    /// </summary>
+    private void FireVolcanicWinter(double simulatedYears)
+    {
+        var target = PickRandomLivingPlanet();
+        if (target is null) return;
+
+        // High Reddit chaos → deeper mutation suppression (0.35 at max, 0.60 at baseline).
+        double debuff = Math.Clamp(0.60 - _config.ChaosFactor * 0.25, 0.35, 0.60);
+        foreach (var biome in target.Biomes)
+            biome.MutationRate = (float)Math.Max(0.0, biome.MutationRate * debuff);
+
+        ExtinguishFraction(target, 0.20);
+        EventBus.Publish(new VolcanicWinterEvent(target, debuff, simulatedYears));
+    }
+
+    /// <summary>
+    /// V2 catastrophe: A pathogen pandemic sweeps the target planet.  Extinction
+    /// severity scales linearly with <see cref="SimulationConfig.ChaosFactor"/>:
+    /// low engagement means a contained outbreak (10 % of species); maximum
+    /// Reddit chaos drives it to a 40 % mass-extinction event.
+    /// </summary>
+    private void FirePandemic(double simulatedYears)
+    {
+        var target = PickRandomLivingPlanet();
+        if (target is null) return;
+
+        double extinctionFraction = Math.Clamp(0.10 + _config.ChaosFactor * 0.30, 0.10, 0.40);
+        int killed = ExtinguishFraction(target, extinctionFraction);
+        EventBus.Publish(new PandemicEvent(target, killed, simulatedYears));
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private CelestialBody? PickRandomLivingPlanet()
@@ -263,4 +358,6 @@ internal enum ProceduralEventType
     IceAge,
     GammaRayBurst,
     CometDelivery,
+    VolcanicWinter,  // V2 catastrophe
+    Pandemic,        // V2 catastrophe
 }
