@@ -29,7 +29,7 @@ public sealed class RedditVoteParser
     public const string BombardWithCosmicRaysOption   = "Bombard with Cosmic Rays";
     public const string TriggerVolcanicActivityOption = "Trigger Volcanic Activity";
     public const string SteerCometSwarmOption         = "Steer a Comet Swarm";
-    public const string AggressivePredationDriveOption= "Aggressive Predation Drive";
+    public const string AggressivePredationDriveOption = "Aggressive Predation Drive";
     public const string IncreaseSolarProximityOption  = "Increase Solar Proximity";
 
     private readonly Dictionary<string, double> _planetTemperatureModifiers = new(StringComparer.OrdinalIgnoreCase);
@@ -193,13 +193,16 @@ public sealed class RedditVoteParser
     {
         if (alphaSpecies is null || payload is null) return;
 
-        var genome = alphaSpecies.BaseGenome;
-        genome.MutationVolatility = Math.Clamp(genome.MutationVolatility + payload.MutationVolatilityDelta, 0f, 1f);
+        Genome mutatedGenome = alphaSpecies.BaseGenome;
+        mutatedGenome.MutationVolatility = Math.Clamp(
+            mutatedGenome.MutationVolatility + payload.MutationVolatilityDelta,
+            0f,
+            1f);
 
         if (payload.ForceAlphaCarnivore)
-            genome.DietType = DietType.Carnivore;
+            mutatedGenome.DietType = DietType.Carnivore;
 
-        alphaSpecies.BaseGenome = genome;
+        alphaSpecies.BaseGenome = mutatedGenome;
     }
 
     private static void EnsurePayload(RedditVotePayload? payload)
