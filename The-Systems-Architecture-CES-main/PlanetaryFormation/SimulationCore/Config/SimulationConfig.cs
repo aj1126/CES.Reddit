@@ -115,7 +115,77 @@ public class SimulationConfig : UniverseSettings
     /// The player loses if all habitable planets are sterile before this elapses.
     /// </summary>
     public double DefaultScenarioTimeLimitYears { get; set; } = 50_000_000.0;
+    // ── Reddit Game Loop ──────────────────────────────────────────────────────
+    //
+    // V2 delta notes:
+    //   • MutationVolatilityModifier replaces V2's flat mutationVolatility = 15.0f
+    //     (an accumulator counter, ~7% effective per-tick rate) with an additive
+    //     multiplier on top of GenomeMutationStdDev. V1/current default (0.0) is
+    //     neutral; a Reddit "Bombard with Cosmic Rays" vote adds +0.08 per ballot.
+    //   • ChaosFactor exposes the previously local chaosPressure variable from
+    //     ApplyRedditEngagementChaos() as a persistent, observable property so
+    //     DataMiningAutomator can log it every tick without recomputing.
+    //   • CurrentRedditEngagement stores the raw weighted score
+    //     (upvotes × UpvoteEngagementWeight + comments × CommentEngagementWeight)
+    //     from the last poll window. V2 had no equivalent — engagement was
+    //     recomputed inline and discarded.
+    //   • EdenSystemLifeChance is the V2 "Pity Timer". V2 defaulted to 1.0
+    //     (guaranteed life in every star system). We lower it to 0.15 so life
+    //     emergence is earned, not automatic — the community must vote to steer
+    //     a comet or trigger abiogenesis to reach 1.0 via StewardCommands.
+    //   • StewardshipCosmicEnergyRechargePerTick / CosmicEnergyPoolMax are the
+    //     balancing knobs for the command-queue economy added in the refinement.
 
+    /// <summary>
+    /// Normalized chaos pressure [0, 1] from the most recent Reddit engagement
+    /// window. 0 = no engagement, 1 = maximum chaos. Persisted here so
+    /// TelemetryLogger and ComplexityEngine can read it without recomputing.
+    /// </summary>
+    public double ChaosFactor { get; set; } = 0.0;
+
+    /// <summary>
+    /// Raw weighted Reddit engagement score from the last poll parse:
+    ///   upvotes × UpvoteEngagementWeight + comments × CommentEngagementWeight.
+    /// Written by SimulationConfig.ApplyRedditEngagementChaos() each weekly tick.
+    /// </summary>
+    public double CurrentRedditEngagement { get; set; } = 0.0;
+
+    /// <summary>
+    /// Additive modifier applied on top of GenomeMutationStdDev during NudgeGenome().
+    /// Accumulated from Reddit vote payloads ("Bombard with Cosmic Rays" += 0.08).
+    /// Decays by MutationVolatilityDecayPerTick each tick toward 0.
+    /// Range [0, 1]; values above ~0.3 cause near-guaranteed speciation every cycle.
+    /// V2 equivalent: mutationVolatility accumulator threshold of 15.0f (~7%/tick).
+    /// </summary>
+    public double MutationVolatilityModifier { get; set; } = 0.0;
+
+    /// <summary>
+    /// How much MutationVolatilityModifier decays per tick toward baseline.
+    /// Prevents a single "Solar Flare" vote from permanently destabilizing the genome pool.
+    /// Set to 0 to make volatility permanent until overridden (V2 behaviour).
+    /// </summary>
+    public double MutationVolatilityDecayPerTick { get; set; } = 0.005;
+
+    /// <summary>
+    /// Probability [0, 1] that any newly generated star system is guaranteed to
+    /// contain at least one life-bearing planet regardless of abiogenesis RNG.
+    /// V2 default: 1.0 (always guaranteed — acts as a pity timer so the subreddit
+    /// is never stuck watching a dead rock for weeks).
+    /// CES.Reddit default: 0.15 — life must be earned; community votes push it higher.
+    /// </summary>
+    public double EdenSystemLifeChance { get; set; } = 0.15;
+
+    /// <summary>
+    /// Cosmic Energy recharged per tick for the StewardshipManager command queue.
+    /// Higher values let the subreddit apply catalysts more frequently.
+    /// </summary>
+    public float StewardshipCosmicEnergyRechargePerTick { get; set; } = 10f;
+
+    /// <summary>
+    /// Hard cap on the community's Cosmic Energy pool.
+    /// At 200 the community can bank ~20 ticks of energy before it is wasted.
+    /// </summary>
+    public float StewardshipCosmicEnergyPoolMax { get; set; } = 200f;
     // ── Singleton ─────────────────────────────────────────────────────────────
 
     private static SimulationConfig? _instance;
@@ -132,6 +202,7 @@ public class SimulationConfig : UniverseSettings
     /// <summary>
     /// Convenience wrapper for applying the Reddit engagement-to-chaos link using
     /// this config instance's mutation and procedural-event settings.
+    /// Also persists ChaosFactor and CurrentRedditEngagement for telemetry.
     /// </summary>
     public double ApplyRedditEngagementChaos(
         long upvotes,
@@ -150,6 +221,26 @@ public class SimulationConfig : UniverseSettings
         MutationProbabilityMax = updated.MutationProbabilityMax;
         ProceduralEventMeanIntervalYears = updated.ProceduralEventMeanIntervalYears;
 
+        // Persist the observable Reddit state so DataMiningAutomator and
+        // TelemetryLogger can read without recomputing.
+        CurrentRedditEngagement =
+            Math.Max(0, upvotes)  * UpvoteEngagementWeight +
+            Math.Max(0, comments) * CommentEngagementWeight;
+        ChaosFactor = Math.Clamp(
+            1.0 - Math.Exp(-CurrentRedditEngagement * EngagementChaosResponse),
+            0.0, 1.0);
+
         return updated.ChaosMultiplier;
+    }
+
+    /// <summary>
+    /// Decays MutationVolatilityModifier by MutationVolatilityDecayPerTick.
+    /// Call once per TickEvent from MacroSimulationManager.OnTick() so Reddit
+    /// vote volatility spikes fade naturally between weekly polls.
+    /// </summary>
+    public void TickVolatilityDecay()
+    {
+        MutationVolatilityModifier =
+            Math.Max(0.0, MutationVolatilityModifier - MutationVolatilityDecayPerTick);
     }
 }
