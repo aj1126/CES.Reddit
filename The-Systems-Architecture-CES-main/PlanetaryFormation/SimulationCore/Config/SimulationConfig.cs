@@ -138,22 +138,18 @@ public class SimulationConfig : UniverseSettings
         long comments,
         IEnumerable<Models.CelestialBody>? planets = null)
     {
-        double min = MutationProbabilityMin;
-        double max = MutationProbabilityMax;
-        double interval = ProceduralEventMeanIntervalYears;
-
-        double multiplier = base.ApplyRedditEngagementChaos(
+        var updated = base.ApplyRedditEngagementChaos(
             upvotes,
             comments,
             planets,
-            ref min,
-            ref max,
-            ref interval);
+            MutationProbabilityMin,
+            MutationProbabilityMax,
+            ProceduralEventMeanIntervalYears);
 
-        MutationProbabilityMin = min;
-        MutationProbabilityMax = max;
-        ProceduralEventMeanIntervalYears = interval;
+        MutationProbabilityMin = updated.MutationProbabilityMin;
+        MutationProbabilityMax = updated.MutationProbabilityMax;
+        ProceduralEventMeanIntervalYears = updated.ProceduralEventMeanIntervalYears;
 
-        return multiplier;
+        return updated.ChaosMultiplier;
     }
 }

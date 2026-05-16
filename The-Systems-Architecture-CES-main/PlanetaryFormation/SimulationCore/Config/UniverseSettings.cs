@@ -42,7 +42,7 @@ public class UniverseSettings
     private double _baseMutationProbabilityMin;
     private double _baseMutationProbabilityMax;
     private double _baseProceduralEventMeanIntervalYears;
-    private readonly Dictionary<Biome, double> _baseBiomeMutationRates = new();
+    private readonly Dictionary<string, double> _baseBiomeMutationRates = new();
 
     /// <summary>
     /// Applies external Reddit engagement (upvotes/comments) to globally scale
@@ -54,17 +54,18 @@ public class UniverseSettings
     /// Optional planet set whose biome mutation rates are scaled alongside global
     /// genome mutation probabilities.
     /// </param>
-    /// <param name="mutationProbabilityMin">Reference to config minimum mutation probability.</param>
-    /// <param name="mutationProbabilityMax">Reference to config maximum mutation probability.</param>
-    /// <param name="proceduralEventMeanIntervalYears">Reference to mean event interval years.</param>
-    /// <returns>The applied chaos multiplier (>= 1.0).</returns>
-    public double ApplyRedditEngagementChaos(
+    /// <param name="mutationProbabilityMin">Current config minimum mutation probability.</param>
+    /// <param name="mutationProbabilityMax">Current config maximum mutation probability.</param>
+    /// <param name="proceduralEventMeanIntervalYears">Current mean event interval years.</param>
+    /// <returns>Updated mutation/event values and applied chaos multiplier.</returns>
+    public (double MutationProbabilityMin, double MutationProbabilityMax, double ProceduralEventMeanIntervalYears, double ChaosMultiplier)
+        ApplyRedditEngagementChaos(
         long upvotes,
         long comments,
         IEnumerable<CelestialBody>? planets,
-        ref double mutationProbabilityMin,
-        ref double mutationProbabilityMax,
-        ref double proceduralEventMeanIntervalYears)
+        double mutationProbabilityMin,
+        double mutationProbabilityMax,
+        double proceduralEventMeanIntervalYears)
     {
         upvotes  = Math.Max(0, upvotes);
         comments = Math.Max(0, comments);
@@ -84,40 +85,51 @@ public class UniverseSettings
         double chaosPressure = 1.0 - Math.Exp(-weightedEngagement * EngagementChaosResponse);
         CurrentEngagementChaosMultiplier = 1.0 + chaosPressure * MaxChaosMultiplierBoost;
 
-        mutationProbabilityMin = Math.Clamp(
+        var updatedMutationProbabilityMin = Math.Clamp(
             _baseMutationProbabilityMin * CurrentEngagementChaosMultiplier,
             0.0,
             1.0);
 
-        mutationProbabilityMax = Math.Clamp(
+        var updatedMutationProbabilityMax = Math.Clamp(
             _baseMutationProbabilityMax * CurrentEngagementChaosMultiplier,
-            mutationProbabilityMin,
+            updatedMutationProbabilityMin,
             1.0);
 
-        proceduralEventMeanIntervalYears = Math.Max(
+        var updatedProceduralEventMeanIntervalYears = Math.Max(
             MinProceduralEventMeanIntervalYears,
             _baseProceduralEventMeanIntervalYears / CurrentEngagementChaosMultiplier);
 
         if (planets is not null)
             ScaleBiomeMutationRates(planets, CurrentEngagementChaosMultiplier);
 
-        return CurrentEngagementChaosMultiplier;
+        return (
+            updatedMutationProbabilityMin,
+            updatedMutationProbabilityMax,
+            updatedProceduralEventMeanIntervalYears,
+            CurrentEngagementChaosMultiplier);
     }
 
     private void ScaleBiomeMutationRates(IEnumerable<CelestialBody> planets, double multiplier)
     {
-        foreach (var biome in planets.SelectMany(p => p.Biomes))
+        foreach (var planet in planets)
         {
-            if (!_baseBiomeMutationRates.ContainsKey(biome))
-                _baseBiomeMutationRates[biome] = biome.MutationRate;
+            foreach (var biome in planet.Biomes)
+            {
+                string key = BuildBiomeKey(planet, biome);
+                if (!_baseBiomeMutationRates.ContainsKey(key))
+                    _baseBiomeMutationRates[key] = biome.MutationRate;
 
-            double baseline = _baseBiomeMutationRates[biome];
-            biome.MutationRate = Math.Clamp(
-                baseline * multiplier,
-                0.0,
-                MaxBiomeMutationRateUnderEngagement);
+                double baseline = _baseBiomeMutationRates[key];
+                biome.MutationRate = Math.Clamp(
+                    baseline * multiplier,
+                    0.0,
+                    MaxBiomeMutationRateUnderEngagement);
+            }
         }
     }
+
+    private static string BuildBiomeKey(CelestialBody planet, Biome biome) =>
+        $"{planet.Name}::{biome.Name}";
 
     // ── Complexity / Heat-Death tuning ────────────────────────────────────────
 

@@ -27,6 +27,10 @@ public record BigBangRebootEvent(double SimulatedYears, int RebootCount);
 /// </summary>
 public class ComplexityEngine
 {
+    private const int MaxLifeStageValue = (int)LifeStage.Sapient;
+    private const double DiversityEvennessWeight = 0.6;
+    private const double DiversityRichnessWeight = 0.4;
+
     private readonly Universe _universe;
     private readonly SolarSystem _system;
     private readonly MicroSimulationManager _microManager;
@@ -34,6 +38,7 @@ public class ComplexityEngine
 
     private long _previousBiomass;
     private int _previousSpeciesCount;
+    private bool _detached;
 
     public double EntropyPercent { get; private set; }
     public double Complexity { get; private set; }
@@ -54,7 +59,12 @@ public class ComplexityEngine
     }
 
     /// <summary>Removes the TickEvent subscription.</summary>
-    public void Detach() => EventBus.Unsubscribe<TickEvent>(OnTick);
+    public void Detach()
+    {
+        if (_detached) return;
+        EventBus.Unsubscribe<TickEvent>(OnTick);
+        _detached = true;
+    }
 
     private void OnTick(TickEvent tick)
     {
@@ -144,7 +154,7 @@ public class ComplexityEngine
 
         double lifeStageScore = _system.Planets.Count == 0
             ? 0.0
-            : _system.Planets.Average(p => (double)p.LifeStage / (int)LifeStage.Sapient);
+            : _system.Planets.Average(p => (double)p.LifeStage / MaxLifeStageValue);
 
         double weighted =
             diversityScore * _config.ComplexityDiversityWeight +
@@ -189,7 +199,7 @@ public class ComplexityEngine
             0.0,
             1.0);
 
-        return 0.6 * evennessScore + 0.4 * richnessScore;
+        return DiversityEvennessWeight * evennessScore + DiversityRichnessWeight * richnessScore;
     }
 
     private double MeasureChaosIndex()
