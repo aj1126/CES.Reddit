@@ -86,3 +86,45 @@ DeveloperOverrides.ForceGenomeTraits(species, g => {
 - **`TelemetryLogger`** — auto-subscribes to `AbiogenesisEvent`, `SpeciationEvent`, `ExtinctionEvent`; buffers and flushes to a fixed-schema CSV at `TelemetryFlushInterval`
 - **`SaveManager`** — JSON snapshot of `SolarSystem` + all `PopulationPool`s (species genomes, populations, lineage IDs)
 - **`Program.cs`** — updated to exercise all six iterations as a headless console harness, including full Universe → Galaxy → StarSystem hierarchy demo and Developer Overrides showcase
+
+## Repository Structure (quick map)
+
+- `PlanetaryFormation/Models/` — domain entities (`Universe`, `Galaxy`, `SolarSystem`, `CelestialBody` + planet types, `Biome`, enums).
+- `PlanetaryFormation/SimulationCore/` — simulation logic by subsystem:
+  - `Time/` state machine + simulation clock
+  - `Macro/` habitability + abiogenesis
+  - `Micro/` genome/species/population evolution
+  - `Mutation/` biome mutation engine and mutation typing
+  - `RenderBridge/` data-only contracts used by the Unity-facing render layer
+  - `Behavior/` locomotion and creature-state contracts
+  - `Game/` player actions, resources, goals, procedural events
+  - `IO/` Reddit poll parsing and engagement integration
+  - `Telemetry/`, `Persistence/`, `Debug/`, `Events/`, `Config/` cross-cutting infrastructure
+- `PlanetaryFormation/Program.cs` — executable demo wiring all systems together.
+- `PlanetaryFormation.Tests/` — unit tests for deterministic core logic.
+
+## Key Technologies
+
+- .NET 8 / C#
+- Event-driven architecture via a typed in-process `EventBus`
+- Data-oriented simulation contracts (struct-heavy micro/behavior models)
+- xUnit test suite (`PlanetaryFormation.Tests`) for core logic validation
+
+## Build & Test
+
+From `The-Systems-Architecture-CES-main`:
+
+- Build app: `dotnet build PlanetaryFormation/PlanetaryFormation.csproj -nologo`
+- Run tests: `dotnet test PlanetaryFormation.Tests/PlanetaryFormation.Tests.csproj -nologo`
+
+## Current Development Status
+
+Implemented and demonstrable in the current codebase:
+- Iterations 1–6 architecture (time framework, macro/micro simulation, render bridge contracts, behavior contracts, universe hierarchy)
+- Reddit poll integration + chaos coupling (`SimulationConfig`, `RedditVoteParser`)
+- Developer overrides, telemetry logging, save/load support, and scenario/game-loop scaffolding
+
+Still remaining for production readiness:
+- Unity runtime integration for render/physics contracts (currently data contracts + console harness)
+- End-to-end integration/performance/load testing at scale
+- CI quality gates and release-hardening workflows (coverage gates, regression suites, packaging/deployment)
