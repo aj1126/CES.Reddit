@@ -1,4 +1,6 @@
 using PlanetaryFormation.Models;
+using PlanetaryFormation.SimulationCore.Config;
+using PlanetaryFormation.SimulationCore.Events;
 using PlanetaryFormation.SimulationCore.Micro;
 
 namespace PlanetaryFormation.SimulationCore.IO;
@@ -20,6 +22,26 @@ public sealed class RedditVotePayload
     public bool ForceAlphaCarnivore { get; set; }
     public double OrbitalRadiusDeltaAu { get; set; }
 }
+
+/// <summary>
+/// Published on the <see cref="EventBus"/> after a winning Reddit poll is fully
+/// applied to <see cref="SimulationConfig"/>.  DataMiningAutomator and any other
+/// observer subscribe here — they never hold a direct reference to the parser or
+/// the config, preserving the decoupled EventBus contract.
+/// </summary>
+public record PollAppliedEvent(
+    /// <summary>The poll option that received the most votes this window.</summary>
+    string WinningOption,
+    /// <summary>Raw upvote count supplied to the poll window.</summary>
+    long Upvotes,
+    /// <summary>Raw comment count supplied to the poll window.</summary>
+    long Comments,
+    /// <summary>Chaos multiplier returned by ApplyRedditEngagementChaos (1.0 = neutral).</summary>
+    double ChaosMultiplier,
+    /// <summary>MutationVolatilityModifier after this poll's delta was applied.</summary>
+    double MutationVolatilityModifier,
+    /// <summary>ProceduralEventMeanIntervalYears after engagement scaling.</summary>
+    double ProceduralEventMeanIntervalYears);
 
 /// <summary>
 /// Maps external Reddit poll outcomes to simulation-facing variables and effects.
@@ -205,6 +227,131 @@ public sealed class RedditVoteParser
             mutatedGenome.DietType = DietType.Carnivore;
 
         alphaSpecies.BaseGenome = mutatedGenome;
+    }
+
+    /// <summary>
+    /// Applies a parsed payload's <em>SimulationConfig-level</em> effects:
+    /// <list type="bullet">
+    ///   <item>
+    ///     "Bombard with Cosmic Rays" → accumulates
+    ///     <see cref="SimulationConfig.MutationVolatilityModifier"/>, which widens
+    ///     the Gaussian genome nudge in <c>MicroSimulationManager.NudgeGenome()</c>
+    ///     and decays naturally each tick via <c>TickVolatilityDecay()</c>.
+    ///   </item>
+    ///   <item>
+    ///     All options → calls <see cref="SimulationConfig.ApplyRedditEngagementChaos"/>
+    ///     to update <c>ChaosFactor</c>, <c>CurrentRedditEngagement</c>, and
+    ///     <c>ProceduralEventMeanIntervalYears</c> via the engagement-chaos formula,
+    ///     which causes the <see cref="Game.ProceduralEventEngine"/> to shorten its
+    ///     next scheduled catastrophe on the very next tick.
+    ///   </item>
+    /// </list>
+    /// This method is intentionally synchronous — it writes to shared simulation
+    /// state and must run on the caller's (main/sim-thread) context after
+    /// <see cref="ParseAndApplyAsync"/> returns from its background thread.
+    /// </summary>
+    /// <param name="payload">Payload produced by <see cref="Parse"/>.</param>
+    /// <param name="upvotes">Raw upvote count for this engagement window.</param>
+    /// <param name="comments">Raw comment count for this engagement window.</param>
+    /// <param name="config">The live <see cref="SimulationConfig"/> instance.</param>
+    /// <param name="planets">
+    ///   Optional planet set whose biome mutation rates are scaled alongside global
+    ///   genome mutation probabilities.
+    /// </param>
+    /// <returns>The chaos multiplier returned by <see cref="SimulationConfig.ApplyRedditEngagementChaos"/>.</returns>
+    public double ApplyToConfig(
+        RedditVotePayload payload,
+        long upvotes,
+        long comments,
+        SimulationConfig config,
+        IEnumerable<CelestialBody>? planets = null)
+    {
+        if (payload is null) throw new ArgumentNullException(nameof(payload));
+        if (config is null)  throw new ArgumentNullException(nameof(config));
+
+        // 1. "Bombard with Cosmic Rays" delta → accumulate MutationVolatilityModifier.
+        //    Clamped to [0, 1]; TickVolatilityDecay() bleeds it back to 0 over time.
+        if (payload.MutationVolatilityDelta > 0)
+        {
+            config.MutationVolatilityModifier = Math.Clamp(
+                config.MutationVolatilityModifier + payload.MutationVolatilityDelta,
+                0.0, 1.0);
+        }
+
+        // 2. Drive ChaosFactor, CurrentRedditEngagement, and ProceduralEventMeanIntervalYears.
+        //    The base formula: interval = baseInterval / (1 + chaosPressure * MaxBoost)
+        //    High upvotes/comments → lower interval → more frequent catastrophes.
+        return config.ApplyRedditEngagementChaos(upvotes, comments, planets);
+    }
+
+    /// <summary>
+    /// Async entry point for a weekly Reddit poll cycle.
+    /// <para>
+    ///   The CPU-bound parse runs on a thread-pool thread via <see cref="Task.Run"/>.
+    ///   Config writes and EventBus publication happen on the caller's context after
+    ///   the await, keeping shared simulation state thread-safe without locks.
+    /// </para>
+    /// <para>
+    ///   Publishes a <see cref="PollAppliedEvent"/> on the <see cref="EventBus"/>
+    ///   so DataMiningAutomator (and any future observer) can log the outcome without
+    ///   holding a direct reference to this parser or the config.
+    /// </para>
+    /// </summary>
+    /// <param name="pollResults">Raw rows from the Reddit poll API.</param>
+    /// <param name="upvotes">Total upvotes on the associated Reddit post this window.</param>
+    /// <param name="comments">Total comments on the associated Reddit post this window.</param>
+    /// <param name="config">The live <see cref="SimulationConfig"/> instance to update.</param>
+    /// <param name="planets">
+    ///   Optional planet set for per-biome mutation scaling inside
+    ///   <see cref="SimulationConfig.ApplyRedditEngagementChaos"/>.
+    /// </param>
+    /// <param name="cancellationToken">Token to cancel the background parse.</param>
+    /// <returns>The applied payload and the resulting chaos multiplier.</returns>
+    public async Task<(RedditVotePayload Payload, double ChaosMultiplier)> ParseAndApplyAsync(
+        IEnumerable<RedditPollResult> pollResults,
+        long upvotes,
+        long comments,
+        SimulationConfig config,
+        IEnumerable<CelestialBody>? planets = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (pollResults is null) throw new ArgumentNullException(nameof(pollResults));
+        if (config is null)      throw new ArgumentNullException(nameof(config));
+
+        // Materialize once here so the list can be safely captured by the lambda
+        // and also inspected for the winning option without double-enumeration.
+        var results = pollResults as IReadOnlyList<RedditPollResult>
+                      ?? pollResults.ToList();
+
+        // Identify the winning option before handing off to the background thread
+        // so we don't need to marshal results back just for logging.
+        string winningOption = results.Count > 0
+            ? (results.OrderByDescending(r => r.Votes).First().Option ?? string.Empty)
+            : string.Empty;
+
+        // Offload parse (potentially large poll datasets) to the thread pool.
+        // ConfigureAwait(false) avoids re-entering the Unity main thread (or any
+        // synchronisation context) after the parse — ApplyToConfig is called next.
+        RedditVotePayload payload = await Task
+            .Run(() => Parse(results), cancellationToken)
+            .ConfigureAwait(false);
+
+        // Apply config-level effects on the caller's context.
+        // Planet/species-level effects (ApplyToPlanet / ApplyToAlphaSpecies) remain
+        // the caller's responsibility so they can choose the correct target.
+        double chaosMultiplier = ApplyToConfig(payload, upvotes, comments, config, planets);
+
+        // Notify all EventBus subscribers (e.g. DataMiningAutomator's logger, UI).
+        // This keeps DataMiningAutomator fully decoupled — it never references the parser.
+        EventBus.Publish(new PollAppliedEvent(
+            winningOption,
+            upvotes,
+            comments,
+            chaosMultiplier,
+            config.MutationVolatilityModifier,
+            config.ProceduralEventMeanIntervalYears));
+
+        return (payload, chaosMultiplier);
     }
 
     private static void EnsurePayload(RedditVotePayload? payload)
