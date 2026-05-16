@@ -6,7 +6,7 @@ namespace PlanetaryFormation.SimulationCore.Config;
 /// C# class loaded once at start-up and injected into all systems.
 /// Pillar V: Scientific Telemetry over Assumption — all balancing knobs live here.
 /// </summary>
-public class SimulationConfig
+public class SimulationConfig : UniverseSettings
 {
     // ── Time ──────────────────────────────────────────────────────────────────
 
@@ -128,4 +128,22 @@ public class SimulationConfig
 
     /// <summary>Allows injecting a custom config (e.g. from tests).</summary>
     public static void SetInstance(SimulationConfig config) => _instance = config;
+
+    /// <summary>
+    /// Convenience wrapper for applying the Reddit engagement-to-chaos link using
+    /// this config instance's mutation and procedural-event settings.
+    /// </summary>
+    public double ApplyRedditEngagementChaos(
+        long upvotes,
+        long comments,
+        IEnumerable<Models.CelestialBody>? planets = null)
+    {
+        return base.ApplyRedditEngagementChaos(
+            upvotes,
+            comments,
+            planets,
+            ref MutationProbabilityMin,
+            ref MutationProbabilityMax,
+            ref ProceduralEventMeanIntervalYears);
+    }
 }
